@@ -91,11 +91,31 @@ class ComplaintDataProcessor:
         
         return chunk
 
-    def prepare_mba_data(self, df):
-        """Prepare data for Market Basket Analysis"""
-        # Group by vehicle and collect components
-        transactions = df.groupby(['manufacturer', 'make', 'model'])['component'] \
-                        .apply(list).tolist()
+    def prepare_mba_data(self, df, max_transactions=50000):
+        """Prepare data for Market Basket Analysis
+        
+        Args:
+            df: DataFrame with complaint data
+            max_transactions: Maximum number of transactions to process (default 50000)
+        """
+        # Group by vehicle (manufacturer + make + model + year) to find component associations
+        # Each unique vehicle becomes a "transaction" with its associated complaint components
+        transactions = df.groupby(['manufacturer', 'make', 'model', 'year'])['component'] \
+                        .apply(lambda x: list(set(x))).tolist()  # Use set to get unique components per vehicle
+        
+        # Filter out transactions with only 1 item (no associations possible)
+        transactions = [t for t in transactions if len(t) > 1]
+        
+        # Limit transactions to prevent memory issues
+        if len(transactions) > max_transactions:
+            print(f"Warning: Limiting to {max_transactions} transactions (from {len(transactions)})")
+            transactions = transactions[:max_transactions]
+        
+        if len(transactions) == 0:
+            print("Warning: No transactions with multiple components found")
+            return pd.DataFrame()
+        
+        print(f"Processing {len(transactions)} transactions with multiple components")
         
         # One-hot encode
         te = TransactionEncoder()
@@ -152,16 +172,33 @@ class ComplaintDataProcessor:
         # Save to parquet
         df.to_parquet(output_path, engine='pyarrow')
 
-    def perform_mba(self, df, min_support=0.05, metric='lift', min_threshold=1):
-        """Perform Market Basket Analysis on components"""
+    def perform_mba(self, df, min_support=0.05, metric='lift', min_threshold=1, max_transactions=50000):
+        """Perform Market Basket Analysis on components
+        
+        Args:
+            df: DataFrame with complaint data
+            min_support: Minimum support threshold
+            metric: Metric to use for rules (lift, confidence, support)
+            min_threshold: Minimum threshold for the metric
+            max_transactions: Maximum transactions to process
+        """
         # Prepare transaction data
-        mba_data = self.prepare_mba_data(df)
+        mba_data = self.prepare_mba_data(df, max_transactions=max_transactions)
+        
+        if mba_data.empty:
+            return pd.DataFrame()
         
         # Find frequent itemsets
         frequent_itemsets = apriori(mba_data, min_support=min_support, use_colnames=True)
         
+        if frequent_itemsets.empty:
+            return pd.DataFrame()
+        
         # Generate association rules
         rules = association_rules(frequent_itemsets, metric=metric, min_threshold=min_threshold)
+        
+        if rules.empty:
+            return pd.DataFrame()
         
         # Add interpretation columns
         rules['antecedents_str'] = rules['antecedents'].apply(lambda x: ', '.join(list(x)))

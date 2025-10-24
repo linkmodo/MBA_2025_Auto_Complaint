@@ -62,8 +62,59 @@ def main():
     # Market Basket Analysis Section
     st.header('🔍 Component Association Analysis')
     
-    # MBA uses full dataset (filtering happens in Component Frequency section)
-    filtered_df = df
+    # MBA filters to reduce data size
+    st.info('💡 **Performance Tip:** Use filters to reduce processing time and memory usage. Start with manufacturer filter.')
+    
+    # Manufacturer and component filters
+    col_mba1, col_mba2, col_mba3 = st.columns([2, 2, 1])
+    with col_mba1:
+        all_mfrs = ['All'] + sorted(df['manufacturer'].unique().tolist())
+        mba_manufacturer = st.selectbox(
+            'Filter by Manufacturer',
+            all_mfrs,
+            index=0,
+            key='mba_mfr_filter',
+            help='Filtering by manufacturer significantly reduces memory usage'
+        )
+    
+    with col_mba2:
+        # Component filter
+        all_components = sorted(df['component'].dropna().unique().tolist())
+        selected_components = st.multiselect(
+            'Filter by Components (optional)',
+            all_components,
+            default=[],
+            key='mba_comp_filter',
+            help='Select specific components to analyze. Leave empty for all components.'
+        )
+    
+    with col_mba3:
+        max_transactions = st.number_input(
+            'Max Transactions',
+            min_value=1000,
+            max_value=100000,
+            value=50000,
+            step=5000,
+            help='Limit number of transactions to prevent memory errors'
+        )
+    
+    # Filter data for MBA
+    if mba_manufacturer != 'All':
+        filtered_df = df[df['manufacturer'] == mba_manufacturer]
+    else:
+        filtered_df = df
+    
+    # Apply component filter if selected
+    if selected_components:
+        filtered_df = filtered_df[filtered_df['component'].isin(selected_components)]
+        st.caption(f"🔍 Analyzing {len(selected_components)} selected components")
+    
+    # Show data size warning
+    unique_complaints = filtered_df['cmplid'].nunique()
+    st.caption(f"📊 Dataset size: {len(filtered_df):,} records | {unique_complaints:,} unique complaints")
+    
+    if unique_complaints > 100000:
+        st.warning('⚠️ Large dataset detected. Consider filtering by manufacturer or reducing max transactions.')
     
     # Parameter explanation section
     with st.expander('ℹ️ Understanding MBA Parameters', expanded=False):
@@ -73,10 +124,10 @@ def main():
         #### 📊 Minimum Support
         **Purpose:** Filters out itemsets that appear too infrequently to be meaningful.
         
-        - **Typical Range:** 0.001 – 0.1 (0.1% to 10%)
-        - **Default:** 0.01 (1%) - recommended starting point
-        - **Large datasets:** Use smaller support (e.g., 0.001)
-        - **Smaller datasets:** Use higher support (e.g., 0.05–0.1)
+        - **Range:** 0.05 – 0.2 (5% to 20%)
+        - **Default:** 0.08 (8%) - recommended starting point
+        - **Memory-safe:** Higher values (8%+) prevent memory issues
+        - **To find more patterns:** Lower to 5-6% if needed
         
         #### 📈 Association Metric
         Used to rank or filter association rules once frequent itemsets are found.
@@ -110,14 +161,14 @@ def main():
         with col1:
             min_support = st.slider(
                 'Minimum Support',
-                min_value=0.001,
+                min_value=0.05,
                 max_value=0.2,
-                value=0.01,
-                step=0.001,
-                format="%.3f",
-                help="Filters itemsets by frequency. Lower = find rarer patterns. Higher = only common patterns."
+                value=0.08,
+                step=0.01,
+                format="%.2f",
+                help="Filters itemsets by frequency. Higher values prevent memory issues. Start with 8% and adjust."
             )
-            st.caption(f"📌 Current: {min_support:.3f} ({min_support*100:.1f}% of transactions)")
+            st.caption(f"📌 Current: {min_support:.2f} ({min_support*100:.0f}% of transactions)")
         
         with col2:
             # Dynamic threshold based on metric
@@ -164,14 +215,52 @@ def main():
     if st.button('Run Market Basket Analysis', type='primary'):
         with st.spinner('Running Market Basket Analysis...'):
             try:
-                rules = processor.perform_mba(filtered_df, min_support, metric, min_threshold)
+                rules = processor.perform_mba(filtered_df, min_support, metric, min_threshold, max_transactions)
                 
                 if rules.empty:
-                    st.warning('No association rules found with the current parameters. Try lowering the thresholds.')
+                    st.warning('⚠️ No association rules found with the current parameters.')
+                    st.info("""
+                    **Troubleshooting Tips:**
+                    1. **Lower the Minimum Support** to 0.001 or 0.002 to find rarer patterns
+                    2. **Select a specific manufacturer** to focus on one brand's data
+                    3. **Increase Max Transactions** if you filtered by manufacturer
+                    4. **Check if vehicles have multiple component complaints** - MBA requires vehicles with 2+ different component issues
+                    
+                    The analysis groups complaints by vehicle (manufacturer + make + model + year) and looks for components that fail together.
+                    """)
                 else:
-                    # Show top rules
-                    st.subheader(f'Top Component Associations (by {metric})')
-                    display_cols = ['antecedents_str', 'consequents_str', 'support', 'confidence', 'lift']
+                    # Summary statistics
+                    col_stat1, col_stat2, col_stat3 = st.columns(3)
+                    with col_stat1:
+                        st.metric('Total Rules Found', len(rules))
+                    with col_stat2:
+                        st.metric('Avg Lift', f"{rules['lift'].mean():.2f}")
+                    with col_stat3:
+                        st.metric('Avg Confidence', f"{rules['confidence'].mean():.2%}")
+                    
+                    # Show top rules with column selection
+                    st.subheader(f'🏆 Top Component Associations (by {metric})')
+                    
+                    # Column selector
+                    available_cols = ['antecedents_str', 'consequents_str', 'support', 'confidence', 'lift', 
+                                     'leverage', 'conviction']
+                    default_cols = ['antecedents_str', 'consequents_str', 'support', 'confidence', 'lift']
+                    
+                    # Filter to only show columns that exist in the rules dataframe
+                    available_cols = [col for col in available_cols if col in rules.columns]
+                    default_cols = [col for col in default_cols if col in rules.columns]
+                    
+                    with st.expander('⚙️ Customize Table Columns', expanded=False):
+                        display_cols = st.multiselect(
+                            'Select columns to display',
+                            available_cols,
+                            default=default_cols,
+                            help='Choose which metrics to show in the results table'
+                        )
+                    
+                    if not display_cols:
+                        display_cols = default_cols
+                    
                     st.dataframe(
                         rules[display_cols].head(20),
                         use_container_width=True,
@@ -179,18 +268,173 @@ def main():
                     )
                     
                     # Visualizations
-                    st.subheader('Association Visualizations')
+                    st.subheader('📊 Association Visualizations')
                     
-                    fig = px.scatter(
-                        rules,
-                        x='support',
-                        y='confidence',
-                        color='lift',
-                        hover_data=['antecedents_str', 'consequents_str'],
-                        size='lift',
-                        title='Support vs Confidence (colored by Lift)'
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
+                    # Create tabs for different visualizations
+                    tab1, tab2, tab3, tab4 = st.tabs(['Scatter Plot', 'Top Rules', 'Lift Distribution', 'Network View'])
+                    
+                    with tab1:
+                        # Support vs Confidence scatter
+                        fig = px.scatter(
+                            rules.head(50),
+                            x='support',
+                            y='confidence',
+                            color='lift',
+                            hover_data=['antecedents_str', 'consequents_str'],
+                            size='lift',
+                            title='Support vs Confidence (colored by Lift)',
+                            labels={'support': 'Support', 'confidence': 'Confidence', 'lift': 'Lift'}
+                        )
+                        fig.update_layout(height=500)
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    with tab2:
+                        # Top rules by lift
+                        top_rules = rules.head(15).copy()
+                        top_rules['rule'] = top_rules['antecedents_str'] + ' → ' + top_rules['consequents_str']
+                        fig = px.bar(
+                            top_rules,
+                            x='lift',
+                            y='rule',
+                            orientation='h',
+                            title=f'Top 15 Rules by {metric.capitalize()}',
+                            labels={'lift': 'Lift', 'rule': 'Association Rule'},
+                            color='lift',
+                            color_continuous_scale='Viridis'
+                        )
+                        fig.update_layout(height=600, yaxis={'categoryorder': 'total ascending'})
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    with tab3:
+                        # Lift distribution
+                        fig = px.histogram(
+                            rules,
+                            x='lift',
+                            nbins=30,
+                            title='Distribution of Lift Values',
+                            labels={'lift': 'Lift', 'count': 'Number of Rules'}
+                        )
+                        fig.add_vline(x=1, line_dash="dash", line_color="red", 
+                                     annotation_text="Lift = 1 (Independence)")
+                        fig.update_layout(height=400)
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        st.caption(f"📊 {len(rules[rules['lift'] > 1])} rules with positive association (Lift > 1)")
+                    
+                    with tab4:
+                        # Network visualization using plotly
+                        st.markdown("### Component Association Network")
+                        st.caption("Shows the top 20 strongest associations")
+                        
+                        # Prepare network data
+                        top_network = rules.head(20)
+                        
+                        # Create nodes and edges
+                        nodes = set()
+                        edges = []
+                        for _, row in top_network.iterrows():
+                            ant = row['antecedents_str']
+                            cons = row['consequents_str']
+                            nodes.add(ant)
+                            nodes.add(cons)
+                            edges.append({
+                                'source': ant,
+                                'target': cons,
+                                'lift': row['lift'],
+                                'confidence': row['confidence']
+                            })
+                        
+                        # Create a simple network visualization
+                        import numpy as np
+                        nodes_list = list(nodes)
+                        n = len(nodes_list)
+                        
+                        # Circular layout
+                        angles = np.linspace(0, 2*np.pi, n, endpoint=False)
+                        x_nodes = np.cos(angles)
+                        y_nodes = np.sin(angles)
+                        
+                        # Create edge traces
+                        edge_traces = []
+                        for edge in edges:
+                            source_idx = nodes_list.index(edge['source'])
+                            target_idx = nodes_list.index(edge['target'])
+                            
+                            edge_trace = {
+                                'x': [x_nodes[source_idx], x_nodes[target_idx], None],
+                                'y': [y_nodes[source_idx], y_nodes[target_idx], None],
+                                'mode': 'lines',
+                                'line': {'width': edge['lift'], 'color': 'lightgray'},
+                                'hoverinfo': 'text',
+                                'text': f"{edge['source']} → {edge['target']}<br>Lift: {edge['lift']:.2f}"
+                            }
+                            edge_traces.append(edge_trace)
+                        
+                        # Create node trace
+                        node_trace = {
+                            'x': x_nodes,
+                            'y': y_nodes,
+                            'mode': 'markers+text',
+                            'marker': {'size': 20, 'color': 'lightblue', 'line': {'width': 2, 'color': 'darkblue'}},
+                            'text': nodes_list,
+                            'textposition': 'top center',
+                            'hoverinfo': 'text'
+                        }
+                        
+                        import plotly.graph_objects as go
+                        fig = go.Figure(data=edge_traces + [node_trace])
+                        fig.update_layout(
+                            showlegend=False,
+                            hovermode='closest',
+                            xaxis={'showgrid': False, 'zeroline': False, 'showticklabels': False},
+                            yaxis={'showgrid': False, 'zeroline': False, 'showticklabels': False},
+                            height=600,
+                            title='Component Association Network'
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Brand-specific insights
+                    if mba_manufacturer != 'All':
+                        st.subheader(f'🔍 {mba_manufacturer} Brand Insights')
+                        
+                        # Most common component issues
+                        brand_components = filtered_df['component'].value_counts().head(10)
+                        
+                        col_insight1, col_insight2 = st.columns(2)
+                        
+                        with col_insight1:
+                            st.markdown("**Most Complained Components:**")
+                            fig = px.bar(
+                                brand_components,
+                                orientation='h',
+                                title=f'Top 10 Components for {mba_manufacturer}',
+                                labels={'value': 'Number of Complaints', 'index': 'Component'}
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
+                        
+                        with col_insight2:
+                            st.markdown("**Key Association Patterns:**")
+                            if len(rules) > 0:
+                                # Find most common antecedents
+                                all_antecedents = []
+                                for ant in rules['antecedents']:
+                                    all_antecedents.extend(list(ant))
+                                
+                                from collections import Counter
+                                ant_counts = Counter(all_antecedents).most_common(5)
+                                
+                                st.markdown(f"**Components that trigger other failures:**")
+                                for comp, count in ant_counts:
+                                    st.markdown(f"- **{comp}**: appears in {count} association rules")
+                                
+                                st.markdown(f"\n**Strongest Association:**")
+                                top_rule = rules.iloc[0]
+                                st.info(f"**{top_rule['antecedents_str']}** → **{top_rule['consequents_str']}**\n\n"
+                                       f"- Lift: {top_rule['lift']:.2f}\n"
+                                       f"- Confidence: {top_rule['confidence']:.1%}\n"
+                                       f"- Support: {top_rule['support']:.1%}")
+                            else:
+                                st.info("No significant patterns found.")
                     
             except Exception as e:
                 st.error(f"Error during MBA: {str(e)}")
