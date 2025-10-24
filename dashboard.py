@@ -39,7 +39,11 @@ def main():
         st.metric('Unique Components', df['component'].nunique())
         
     with col3:
-        st.metric('Top Manufacturer', df['manufacturer'].value_counts().index[0])
+        if not df.empty and 'manufacturer' in df.columns:
+            top_mfr = df['manufacturer'].value_counts().index[0] if len(df['manufacturer'].value_counts()) > 0 else 'N/A'
+            st.metric('Top Manufacturer', top_mfr)
+        else:
+            st.metric('Top Manufacturer', 'N/A')
     
     # Add manufacturer filter
     st.sidebar.header("Filters")
@@ -64,44 +68,86 @@ def main():
         metric = st.selectbox('Association Metric', ['lift', 'confidence', 'support'])
         min_threshold = st.slider('Minimum Threshold', 0.1, 5.0, 1.0, 0.1)
     
-    if st.button('Run Market Basket Analysis'):
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        try:
-            # Process with progress updates
-            for i in range(100):
-                if processor._stop_processing:
-                    status_text.warning("Processing stopped")
-                    break
-                
-                progress_bar.progress(i + 1)
-                time.sleep(0.1)  # Simulate processing
-                
-            if not processor._stop_processing:
+    if st.button('Run Market Basket Analysis', type='primary'):
+        with st.spinner('Running Market Basket Analysis...'):
+            try:
                 rules = processor.perform_mba(filtered_df, min_support, metric, min_threshold)
                 
-                # Show top rules
-                st.subheader(f'Top Component Associations (by {metric})')
-                st.dataframe(rules.head(20))
-                
-                # Visualizations
-                st.subheader('Association Visualizations')
-                
-                fig = px.scatter(
-                    rules,
-                    x='support',
-                    y='confidence',
-                    color='lift',
-                    hover_data=['antecedents_str', 'consequents_str'],
-                    size='lift'
+                if rules.empty:
+                    st.warning('No association rules found with the current parameters. Try lowering the thresholds.')
+                else:
+                    # Show top rules
+                    st.subheader(f'Top Component Associations (by {metric})')
+                    display_cols = ['antecedents_str', 'consequents_str', 'support', 'confidence', 'lift']
+                    st.dataframe(
+                        rules[display_cols].head(20),
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                    
+                    # Visualizations
+                    st.subheader('Association Visualizations')
+                    
+                    fig = px.scatter(
+                        rules,
+                        x='support',
+                        y='confidence',
+                        color='lift',
+                        hover_data=['antecedents_str', 'consequents_str'],
+                        size='lift',
+                        title='Support vs Confidence (colored by Lift)'
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+            except Exception as e:
+                st.error(f"Error during MBA: {str(e)}")
+                st.info('Try adjusting the parameters or selecting a specific manufacturer to reduce data size.')
+    
+    # Date Analysis Section
+    st.header('📅 Complaint Date Analysis')
+    
+    # Date range selector
+    date_col = st.selectbox('Select date column for analysis', 
+                          ['date_received', 'date_added', 'fail_date'],
+                          help='date_received = Column 17 (LDATE - when NHTSA received complaint)')
+    
+    if st.button('Analyze Date Patterns'):
+        with st.spinner('Analyzing date patterns...'):
+            date_analysis = processor.analyze_dates(filtered_df, date_column=date_col)
+            
+            if date_analysis is None:
+                st.warning(f'No valid date data available for {date_col}')
+            else:
+                # Yearly trends
+                st.subheader(f'Yearly Complaint Trends ({date_col})')
+                fig = px.bar(
+                    date_analysis['by_year'], 
+                    labels={'index': 'Year', 'value': 'Complaints'},
+                    title=f'Complaints by Year'
                 )
                 st.plotly_chart(fig, use_container_width=True)
                 
-        except Exception as e:
-            st.error(f"Error: {str(e)}")
-        finally:
-            processor._stop_processing = False
+                # Monthly trends
+                st.subheader('Monthly Complaint Trends')
+                monthly_data = date_analysis['by_month'].reset_index()
+                monthly_data.columns = ['Month', 'Complaints']
+                monthly_data['Month'] = monthly_data['Month'].astype(str)
+                fig = px.line(
+                    monthly_data,
+                    x='Month',
+                    y='Complaints',
+                    title='Complaints Over Time'
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Weekday patterns
+                st.subheader('Complaints by Weekday')
+                fig = px.bar(
+                    date_analysis['by_weekday'],
+                    labels={'index': 'Weekday', 'value': 'Complaints'},
+                    title='Day of Week Distribution'
+                )
+                st.plotly_chart(fig, use_container_width=True)
     
     # Component analysis
     st.header('Component Frequency')
@@ -124,30 +170,17 @@ def main():
     
     st.plotly_chart(fig, use_container_width=True)
     
-    # Add click interaction
-    if st.session_state.get('click_data'):
-        clicked_component = st.session_state.click_data['points'][0]['y']
-        st.write(f"Showing details for: {clicked_component}")
-        st.dataframe(
-            filtered_df[filtered_df['component'] == clicked_component]\
-                [['manufacturer', 'make', 'model', 'description']]\
-                .head(20)
+    # Component details section
+    with st.expander('View Component Details'):
+        selected_component = st.selectbox(
+            'Select a component to view details',
+            options=component_counts.index.tolist()
         )
-    
-    # JavaScript to capture clicks
-    st.components.v1.html("""
-    <script>
-    window.onload = function() {
-        const iframe = parent.document.querySelector("iframe[data-testid='stPlotlyChart']");
-        iframe.contentWindow.document.querySelector('.plotly').on('plotly_click', 
-            function(data) {
-                parent.window.stSessionState.set('click_data', data);
-                parent.window.stSessionState.rerun();
-            }
-        );
-    }
-    </script>
-    """, height=0)
+        if selected_component:
+            component_details = filtered_df[filtered_df['component'] == selected_component]\
+                [['manufacturer', 'make', 'model', 'year', 'state', 'description']]\
+                .head(20)
+            st.dataframe(component_details, use_container_width=True)
     
     # Manufacturer analysis
     st.header('Manufacturer Analysis')

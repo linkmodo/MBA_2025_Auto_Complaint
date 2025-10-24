@@ -11,26 +11,30 @@ class ComplaintDataProcessor:
     def __init__(self, file_path):
         self.file_path = file_path
         self._stop_processing = False
-        self.columns = {
-            'id': 0,
-            'complaint_id': 1,
-            'manufacturer': 2,
-            'make': 3,
-            'model': 4,
-            'year': 5,
-            'crash': 6,
-            'fail_date': 7,
-            'fire': 8,
-            'injured': 9,
-            'deaths': 10,
-            'component': 11,
-            'city': 12,
-            'state': 13,
-            'vin': 14,
-            'date_added': 15,
-            'date_received': 16,
-            'description': 20
-        }
+        # Column mapping based on column description.txt (1-indexed columns)
+        # CSV columns are named Column1, Column2, etc.
+        self.column_names = [
+            'cmplid',           # Column1
+            'odino',            # Column2
+            'manufacturer',     # Column3
+            'make',             # Column4
+            'model',            # Column5
+            'year',             # Column6
+            'crash',            # Column7
+            'fail_date',        # Column8
+            'fire',             # Column9
+            'injured',          # Column10
+            'deaths',           # Column11
+            'component',        # Column12
+            'city',             # Column13
+            'state',            # Column14
+            'vin',              # Column15
+            'date_added',       # Column16 - DATEA
+            'date_received',    # Column17 - LDATE (complaint received by NHTSA)
+            'miles',            # Column18
+            'occurrences',      # Column19
+            'description'       # Column20 - CDESCR
+        ]
         self.date_formats = {
             'fail_date': '%Y%m%d',
             'date_added': '%Y%m%d',
@@ -74,9 +78,9 @@ class ComplaintDataProcessor:
 
     def _clean_data(self, chunk):
         """Clean and transform data chunk"""
-        # Rename columns
-        chunk = chunk.rename(columns={f'Column{i+1}': name 
-                                     for name, i in self.columns.items()})
+        # Rename columns - CSV has Column1, Column2, etc.
+        rename_dict = {f'Column{i+1}': name for i, name in enumerate(self.column_names)}
+        chunk = chunk.rename(columns=rename_dict)
         
         # Convert dates
         for col, fmt in self.date_formats.items():
@@ -184,3 +188,45 @@ class ComplaintDataProcessor:
         plt.title('Lift Distribution')
         plt.savefig(f'{output_dir}/lift_distribution.png')
         plt.close()
+
+    def analyze_dates(self, df, date_column='date_received'):
+        """Analyze date patterns in complaint data
+        
+        Args:
+            df: DataFrame with complaint data
+            date_column: Column to analyze ('date_received', 'date_added', or 'fail_date')
+        """
+        if date_column not in df.columns or df[date_column].isna().all():
+            return None
+            
+        date_analysis = {
+            'by_year': df[date_column].dt.year.value_counts().sort_index(),
+            'by_month': df[date_column].dt.to_period('M').value_counts().sort_index(),
+            'by_weekday': df[date_column].dt.day_name().value_counts()
+        }
+        return date_analysis
+
+    def visualize_date_analysis(self, date_analysis, output_dir='date_plots'):
+        """Generate date analysis visualizations"""
+        os.makedirs(output_dir, exist_ok=True)
+        plots_generated = 0
+        
+        # Yearly trends
+        plt.figure(figsize=(12, 6))
+        date_analysis['by_year'].plot(kind='bar')
+        plt.title('Complaints by Year')
+        plt.tight_layout()
+        plt.savefig(f'{output_dir}/complaints_by_year.png')
+        plt.close()
+        plots_generated += 1
+        
+        # Monthly trends
+        plt.figure(figsize=(12, 6))
+        date_analysis['by_month'].plot(kind='line')
+        plt.title('Complaints by Month')
+        plt.tight_layout()
+        plt.savefig(f'{output_dir}/complaints_by_month.png')
+        plt.close()
+        plots_generated += 1
+        
+        print(f"Generated {plots_generated} date analysis visualizations in {output_dir}")
