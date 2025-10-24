@@ -11,13 +11,20 @@ st.set_page_config(
     initial_sidebar_state='collapsed'
 )
 
-# Custom CSS to make container wider
+# Custom CSS for layout
 st.markdown("""
 <style>
     .main .block-container {
-        max-width: 95%;
+        max-width: 950px;
         padding-left: 2rem;
         padding-right: 2rem;
+    }
+    /* Reduce dataset overview font size */
+    [data-testid="stMetricValue"] {
+        font-size: 1.5rem;
+    }
+    [data-testid="stMetricLabel"] {
+        font-size: 0.9rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -47,10 +54,10 @@ def main():
         
     with col3:
         if not df.empty and 'manufacturer' in df.columns:
-            top_mfr = df['manufacturer'].value_counts().index[0] if len(df['manufacturer'].value_counts()) > 0 else 'N/A'
-            st.metric('Top Manufacturer', top_mfr)
+            mfr_count = df['manufacturer'].nunique()
+            st.metric('Number of Manufacturers', mfr_count)
         else:
-            st.metric('Top Manufacturer', 'N/A')
+            st.metric('Number of Manufacturers', 0)
     
     # Market Basket Analysis Section
     st.header('🔍 Component Association Analysis')
@@ -192,10 +199,13 @@ def main():
     # Date Analysis Section
     st.header('📅 Complaint Date Analysis')
     
-    # Date range selector
-    date_col = st.selectbox('Select date column for analysis', 
-                          ['date_received', 'date_added', 'fail_date'],
-                          help='date_received = Column 17 (LDATE - when NHTSA received complaint)')
+    col_date1, col_date2 = st.columns([2, 1])
+    with col_date1:
+        date_col = st.selectbox('Select date column for analysis', 
+                              ['date_received', 'date_added', 'fail_date'],
+                              help='date_received = Column 17 (LDATE - when NHTSA received complaint)')
+    with col_date2:
+        view_type = st.selectbox('View by', ['Month', 'Year', 'Day of Week'])
     
     if st.button('Analyze Date Patterns'):
         with st.spinner('Analyzing date patterns...'):
@@ -204,53 +214,70 @@ def main():
             if date_analysis is None:
                 st.warning(f'No valid date data available for {date_col}')
             else:
-                # Yearly trends
-                st.subheader(f'Yearly Complaint Trends ({date_col})')
-                fig = px.bar(
-                    date_analysis['by_year'], 
-                    labels={'index': 'Year', 'value': 'Complaints'},
-                    title=f'Complaints by Year'
-                )
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Monthly trends
-                st.subheader('Monthly Complaint Trends')
-                monthly_data = date_analysis['by_month'].reset_index()
-                monthly_data.columns = ['Month', 'Complaints']
-                monthly_data['Month'] = monthly_data['Month'].astype(str)
-                fig = px.line(
-                    monthly_data,
-                    x='Month',
-                    y='Complaints',
-                    title='Complaints Over Time'
-                )
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Weekday patterns
-                st.subheader('Complaints by Weekday')
-                fig = px.bar(
-                    date_analysis['by_weekday'],
-                    labels={'index': 'Weekday', 'value': 'Complaints'},
-                    title='Day of Week Distribution'
-                )
-                st.plotly_chart(fig, use_container_width=True)
+                # Display based on selected view type
+                if view_type == 'Month':
+                    st.subheader(f'Monthly Complaint Trends ({date_col})')
+                    monthly_data = date_analysis['by_month'].reset_index()
+                    monthly_data.columns = ['Month', 'Complaints']
+                    monthly_data['Month'] = monthly_data['Month'].astype(str)
+                    fig = px.line(
+                        monthly_data,
+                        x='Month',
+                        y='Complaints',
+                        title='Complaints Over Time',
+                        markers=True
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                elif view_type == 'Year':
+                    st.subheader(f'Yearly Complaint Trends ({date_col})')
+                    fig = px.bar(
+                        date_analysis['by_year'], 
+                        labels={'index': 'Year', 'value': 'Complaints'},
+                        title=f'Complaints by Year'
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                else:  # Day of Week
+                    st.subheader(f'Complaints by Weekday ({date_col})')
+                    fig = px.bar(
+                        date_analysis['by_weekday'],
+                        labels={'index': 'Weekday', 'value': 'Complaints'},
+                        title='Day of Week Distribution'
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+    
+    # Manufacturer analysis (moved before component analysis)
+    st.header('Manufacturer Analysis')
+    manufacturer_counts = df['manufacturer'].value_counts().head(10)
+    
+    fig_mfr = px.pie(
+        manufacturer_counts,
+        names=manufacturer_counts.index,
+        values=manufacturer_counts.values,
+        title='Top 10 Manufacturers by Complaint Count'
+    )
+    fig_mfr.update_traces(textposition='inside', textinfo='percent+label')
+    st.plotly_chart(fig_mfr, use_container_width=True)
+    
+    # Store selected manufacturer from pie chart click
+    if 'selected_mfr' not in st.session_state:
+        st.session_state.selected_mfr = 'All'
+    
+    # Manual manufacturer selector
+    all_manufacturers = ['All'] + sorted(df['manufacturer'].unique().tolist())
+    selected_manufacturer = st.selectbox(
+        '🔍 Select manufacturer to view components:',
+        all_manufacturers,
+        index=all_manufacturers.index(st.session_state.selected_mfr) if st.session_state.selected_mfr in all_manufacturers else 0,
+        key='mfr_selector'
+    )
+    st.session_state.selected_mfr = selected_manufacturer
     
     # Component analysis
     st.header('Component Frequency')
     
-    # Manufacturer filter above component graph
-    col_filter1, col_filter2 = st.columns([1, 3])
-    with col_filter1:
-        all_manufacturers = ['All'] + sorted(df['manufacturer'].unique().tolist())
-        selected_manufacturer = st.selectbox(
-            'Filter by Manufacturer', 
-            all_manufacturers,
-            index=0,
-            key='mfr_filter'
-        )
-    
-    with col_filter2:
-        top_n = st.slider('Number of components to show', 5, 50, 20)
+    top_n = st.slider('Number of components to show', 5, 50, 20)
     
     # Filter data based on selection
     if selected_manufacturer != 'All':
@@ -264,7 +291,7 @@ def main():
         orientation='h',
         labels={'index': 'Component', 'value': 'Count'},
         height=600,
-        title=f'Components for {selected_manufacturer}'
+        title=f'Top {top_n} Components for {selected_manufacturer}'
     )
     
     # Make bars clickable for drill-down
@@ -287,16 +314,6 @@ def main():
                 .head(20)
             st.dataframe(component_details, use_container_width=True)
     
-    # Manufacturer analysis
-    st.header('Manufacturer Analysis')
-    manufacturer_counts = df['manufacturer'].value_counts().head(10)
-    
-    fig = px.pie(
-        manufacturer_counts,
-        names=manufacturer_counts.index,
-        values=manufacturer_counts.values
-    )
-    st.plotly_chart(fig, use_container_width=True)
 
 if __name__ == '__main__':
     main()
