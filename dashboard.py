@@ -8,8 +8,19 @@ import time
 st.set_page_config(
     page_title='Vehicle Complaint Analysis',
     layout='wide',
-    initial_sidebar_state='expanded'
+    initial_sidebar_state='collapsed'
 )
+
+# Custom CSS to make container wider
+st.markdown("""
+<style>
+    .main .block-container {
+        max-width: 95%;
+        padding-left: 2rem;
+        padding-right: 2rem;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 @st.cache_data
 def load_data():
@@ -23,10 +34,6 @@ def main():
     # Load data with progress indicator
     with st.spinner('Loading complaint data...'):
         df, processor = load_data()
-    
-    # Add stop button at top
-    st.sidebar.button("Stop Processing", key="stop_btn", 
-                     on_click=lambda: processor.stop_processing())
     
     # Overview section
     st.header('Dataset Overview')
@@ -45,28 +52,107 @@ def main():
         else:
             st.metric('Top Manufacturer', 'N/A')
     
-    # Add manufacturer filter
-    st.sidebar.header("Filters")
-    all_manufacturers = ['All'] + sorted(df['manufacturer'].unique().tolist())
-    selected_manufacturer = st.sidebar.selectbox(
-        'Select Manufacturer', 
-        all_manufacturers,
-        index=0
-    )
-    
-    # Filter data based on selection
-    if selected_manufacturer != 'All':
-        filtered_df = df[df['manufacturer'] == selected_manufacturer]
-    else:
-        filtered_df = df
-    
     # Market Basket Analysis Section
-    st.header('Component Association Analysis')
+    st.header('🔍 Component Association Analysis')
     
-    with st.expander('Configure MBA Parameters'):
-        min_support = st.slider('Minimum Support', 0.01, 0.2, 0.05, 0.01)
-        metric = st.selectbox('Association Metric', ['lift', 'confidence', 'support'])
-        min_threshold = st.slider('Minimum Threshold', 0.1, 5.0, 1.0, 0.1)
+    # MBA uses full dataset (filtering happens in Component Frequency section)
+    filtered_df = df
+    
+    # Parameter explanation section
+    with st.expander('ℹ️ Understanding MBA Parameters', expanded=False):
+        st.markdown("""
+        ### Parameter Guide
+        
+        #### 📊 Minimum Support
+        **Purpose:** Filters out itemsets that appear too infrequently to be meaningful.
+        
+        - **Typical Range:** 0.001 – 0.1 (0.1% to 10%)
+        - **Default:** 0.01 (1%) - recommended starting point
+        - **Large datasets:** Use smaller support (e.g., 0.001)
+        - **Smaller datasets:** Use higher support (e.g., 0.05–0.1)
+        
+        #### 📈 Association Metric
+        Used to rank or filter association rules once frequent itemsets are found.
+        
+        | Metric | Description | When to Use |
+        |--------|-------------|-------------|
+        | **Support** | How frequently the rule occurs | High statistical reliability needed; common in retail |
+        | **Confidence** | How often Y occurs when X occurs (P(Y given X)) | Predictive relationships; understand conditional probability |
+        | **Lift** | How much more likely Y is given X vs. random | **Most common** - identifies interesting non-trivial relationships; corrects popularity bias |
+        
+        #### 🎯 Minimum Threshold
+        Sets the cutoff value for the chosen metric.
+        
+        - **For Support:** 0.001 – 0.05 (default ~0.01)
+        - **For Confidence:** 0.3 – 0.8 (default ~0.5)
+        - **For Lift:** Usually >1.0 (default = 1) — rules with lift > 1 are positively correlated
+        
+        ---
+        
+        **💡 Recommended Starting Configuration:**
+        - Minimum Support: **0.01**
+        - Metric: **lift**
+        - Minimum Threshold: **1.0**
+        """)
+    
+    with st.expander('⚙️ Configure MBA Parameters', expanded=True):
+        st.info('💡 **Tip:** Start with default values, then adjust based on results. Lower support finds rarer patterns; higher lift finds stronger associations.')
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            min_support = st.slider(
+                'Minimum Support',
+                min_value=0.001,
+                max_value=0.2,
+                value=0.01,
+                step=0.001,
+                format="%.3f",
+                help="Filters itemsets by frequency. Lower = find rarer patterns. Higher = only common patterns."
+            )
+            st.caption(f"📌 Current: {min_support:.3f} ({min_support*100:.1f}% of transactions)")
+        
+        with col2:
+            # Dynamic threshold based on metric
+            metric = st.selectbox(
+                'Association Metric',
+                options=['lift', 'confidence', 'support'],
+                index=0,
+                help="**Lift** (recommended): Measures strength vs. random chance\n**Confidence**: Predictive accuracy\n**Support**: Frequency of occurrence"
+            )
+            
+            # Set threshold ranges based on metric
+            if metric == 'lift':
+                min_threshold = st.slider(
+                    'Minimum Threshold (Lift)',
+                    min_value=0.1,
+                    max_value=5.0,
+                    value=1.0,
+                    step=0.1,
+                    help="Lift > 1 = positive correlation, = 1 independent, < 1 negative correlation"
+                )
+                st.caption(f"📌 Current: {min_threshold:.1f} ({'Positive' if min_threshold > 1 else 'Negative' if min_threshold < 1 else 'Independent'} association)")
+            elif metric == 'confidence':
+                min_threshold = st.slider(
+                    'Minimum Threshold (Confidence)',
+                    min_value=0.1,
+                    max_value=1.0,
+                    value=0.5,
+                    step=0.05,
+                    help="Probability that Y occurs given X. Higher = stronger prediction."
+                )
+                st.caption(f"📌 Current: {min_threshold:.2f} ({min_threshold*100:.0f}% confidence)")
+            else:  # support
+                min_threshold = st.slider(
+                    'Minimum Threshold (Support)',
+                    min_value=0.001,
+                    max_value=0.1,
+                    value=0.01,
+                    step=0.001,
+                    format="%.3f",
+                    help="Minimum frequency for the complete rule (X→Y together)"
+                )
+                st.caption(f"📌 Current: {min_threshold:.3f} ({min_threshold*100:.1f}% of transactions)")
     
     if st.button('Run Market Basket Analysis', type='primary'):
         with st.spinner('Running Market Basket Analysis...'):
@@ -151,7 +237,26 @@ def main():
     
     # Component analysis
     st.header('Component Frequency')
-    top_n = st.slider('Number of components to show', 5, 50, 20)
+    
+    # Manufacturer filter above component graph
+    col_filter1, col_filter2 = st.columns([1, 3])
+    with col_filter1:
+        all_manufacturers = ['All'] + sorted(df['manufacturer'].unique().tolist())
+        selected_manufacturer = st.selectbox(
+            'Filter by Manufacturer', 
+            all_manufacturers,
+            index=0,
+            key='mfr_filter'
+        )
+    
+    with col_filter2:
+        top_n = st.slider('Number of components to show', 5, 50, 20)
+    
+    # Filter data based on selection
+    if selected_manufacturer != 'All':
+        filtered_df = df[df['manufacturer'] == selected_manufacturer]
+    else:
+        filtered_df = df
     
     component_counts = filtered_df['component'].value_counts().head(top_n)
     fig = px.bar(
