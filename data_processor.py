@@ -184,15 +184,3 @@ class ComplaintDataProcessor:
         plt.title('Lift Distribution')
         plt.savefig(f'{output_dir}/lift_distribution.png')
         plt.close()
-
-    def get_unique_values(self, df, column):
-        """Get sorted unique values from a column"""
-        return ['All'] + sorted(df[column].dropna().unique().tolist())
-
-    def filter_data(self, df, filters):
-        """Apply multiple filters to dataframe"""
-        filtered = df.copy()
-        for col, value in filters.items():
-            if value != 'All':
-                filtered = filtered[filtered[col] == value]
-        return filtered
